@@ -1,0 +1,5 @@
+# Package-specific overrides kept separate from the core desktop policy.
+dev-libs/libdbusmenu gtk3
+dev-python/pyside uitools
+dev-util/ostree -dracut
+media-video/ffmpeg vpx

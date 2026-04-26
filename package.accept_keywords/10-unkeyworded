@@ -1,0 +1,5 @@
+# Global ~amd64 already handles the usual unstable flow.
+# Keep only the packages that still need explicit unkeywording.
+net-im/ayugram-desktop **
+sys-kernel/cachyos-kernel **
+virtual/dist-kernel **

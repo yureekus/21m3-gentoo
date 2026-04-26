@@ -1,0 +1,8 @@
+# Kernel stack. Dist kernels use savedconfig; linux-firmware stays on upstream
+# defaults unless its savedconfig has been curated specifically for this laptop.
+sys-kernel/cachyos-kernel modules-sign -lto
+sys-kernel/gentoo-kernel modules-sign
+sys-kernel/installkernel dracut grub
+# AMD CPU microcode is shipped by linux-firmware on Gentoo. With dist-kernel,
+# installkernel/dracut handles the early microcode image generation.
+sys-kernel/linux-firmware dist-kernel initramfs

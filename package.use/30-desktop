@@ -1,0 +1,6 @@
+# Desktop stack
+media-fonts/nerdfonts firacode nerdfontssymbolsonly
+media-video/pipewire pipewire-alsa sound-server
+sys-apps/fwupd gnutls
+sys-auth/pambase elogind
+sys-libs/ncurses -gpm

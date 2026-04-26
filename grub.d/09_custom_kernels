@@ -1,0 +1,275 @@
+#!/bin/sh
+set -e
+
+prefix="/usr"
+exec_prefix="/usr"
+datarootdir="/usr/share"
+datadir="${datarootdir}"
+pkgdatadir="${datadir}/grub"
+
+. "${pkgdatadir}/grub-mkconfig_lib"
+. /etc/default/grub
+
+BOOT_DIR="/boot"
+CLASS="--class gentoo --class gnu-linux --class gnu --class os"
+
+if [ "x${GRUB_DISTRIBUTOR}" = "x" ]; then
+    OS="Gentoo GNU/Linux"
+else
+    OS="${GRUB_DISTRIBUTOR} GNU/Linux"
+fi
+
+: "${GRUB_CMDLINE_LINUX:=}"
+: "${GRUB_CMDLINE_LINUX_DEFAULT:=}"
+: "${GRUB_DISABLE_LINUX_PARTUUID:=true}"
+
+probe_target() {
+    target="$1"
+    path="$2"
+
+    "${grub_probe}" --target="${target}" "${path}" 2>/dev/null || true
+}
+
+findmnt_target() {
+    column="$1"
+    path="$2"
+
+    findmnt -n -o "${column}" "${path}" 2>/dev/null || true
+}
+
+if [ -z "${GRUB_DEVICE}" ]; then
+    GRUB_DEVICE="$(probe_target device /)"
+fi
+
+if [ -z "${GRUB_DEVICE}" ]; then
+    GRUB_DEVICE="$(findmnt_target SOURCE /)"
+fi
+
+if [ -z "${GRUB_DEVICE_BOOT}" ]; then
+    GRUB_DEVICE_BOOT="$(probe_target device "${BOOT_DIR}")"
+fi
+
+if [ -z "${GRUB_DEVICE_BOOT}" ]; then
+    GRUB_DEVICE_BOOT="$(findmnt_target SOURCE "${BOOT_DIR}")"
+fi
+
+if [ -z "${GRUB_DEVICE_BOOT}" ]; then
+    GRUB_DEVICE_BOOT="${GRUB_DEVICE}"
+fi
+
+if [ -z "${GRUB_DEVICE_UUID}" ]; then
+    GRUB_DEVICE_UUID="$(probe_target fs_uuid /)"
+fi
+
+if [ -z "${GRUB_DEVICE_UUID}" ]; then
+    GRUB_DEVICE_UUID="$(findmnt_target UUID /)"
+fi
+
+if [ -z "${GRUB_DEVICE_PARTUUID}" ]; then
+    GRUB_DEVICE_PARTUUID="$(probe_target partuuid /)"
+fi
+
+if [ -z "${GRUB_DEVICE_PARTUUID}" ]; then
+    GRUB_DEVICE_PARTUUID="$(findmnt_target PARTUUID /)"
+fi
+
+if [ -z "${GRUB_FS}" ]; then
+    GRUB_FS="$(probe_target fs /)"
+fi
+
+if [ -z "${GRUB_FS}" ]; then
+    GRUB_FS="$(findmnt_target FSTYPE /)"
+fi
+
+linux_root_device="${GRUB_DEVICE}"
+
+if { [ -n "${GRUB_DEVICE_UUID}" ] || [ -n "${GRUB_DEVICE_PARTUUID}" ]; } \
+    && ! { [ "x${GRUB_DISABLE_LINUX_UUID}" = "xtrue" ] && [ "x${GRUB_DISABLE_LINUX_PARTUUID}" = "xtrue" ]; }; then
+    if [ -n "${GRUB_DEVICE_UUID}" ] && [ "x${GRUB_DISABLE_LINUX_UUID}" != "xtrue" ]; then
+        linux_root_device="UUID=${GRUB_DEVICE_UUID}"
+    elif [ -n "${GRUB_DEVICE_PARTUUID}" ] && [ "x${GRUB_DISABLE_LINUX_PARTUUID}" != "xtrue" ]; then
+        linux_root_device="PARTUUID=${GRUB_DEVICE_PARTUUID}"
+    fi
+fi
+
+case "x${GRUB_FS}" in
+    xbtrfs)
+        rootsubvol="$(make_system_path_relative_to_its_root /)"
+        rootsubvol="${rootsubvol#/}"
+        if [ "x${rootsubvol}" != "x" ]; then
+            GRUB_CMDLINE_LINUX="rootflags=subvol=${rootsubvol} ${GRUB_CMDLINE_LINUX}"
+        fi
+        ;;
+    xzfs)
+        rpool="$(probe_target fs_label /)"
+        bootfs="$(make_system_path_relative_to_its_root / | sed -e 's,@$,,')"
+        linux_root_device="ZFS=${rpool}${bootfs%/}"
+        ;;
+esac
+
+find_initrd() {
+    version="$1"
+    alt_version="$(printf '%s\n' "${version}" | sed -e 's,\.old$,,')"
+    machine="$(uname -m)"
+
+    case "${machine}" in
+        i?86) genkernel_arch="x86" ;;
+        mips|mips64) genkernel_arch="mips" ;;
+        mipsel|mips64el) genkernel_arch="mipsel" ;;
+        arm*) genkernel_arch="arm" ;;
+        *) genkernel_arch="${machine}" ;;
+    esac
+
+    initrd_early=""
+    for early in ${GRUB_EARLY_INITRD_LINUX_STOCK} ${GRUB_EARLY_INITRD_LINUX_CUSTOM}; do
+        if [ -e "${BOOT_DIR}/${early}" ]; then
+            initrd_early="${initrd_early} ${early}"
+        fi
+    done
+
+    initrd_real=""
+    for candidate in \
+        "initrd.img-${version}" \
+        "initrd-${version}.img" \
+        "initrd-${alt_version}.img.old" \
+        "initrd-${version}.gz" \
+        "initrd-${alt_version}.gz.old" \
+        "initrd-${version}" \
+        "initramfs-${version}.img" \
+        "initramfs-${alt_version}.img.old" \
+        "initrd.img-${alt_version}" \
+        "initrd-${alt_version}.img" \
+        "initrd-${alt_version}" \
+        "initramfs-${alt_version}.img" \
+        "initramfs-genkernel-${version}" \
+        "initramfs-genkernel-${alt_version}" \
+        "initramfs-genkernel-${genkernel_arch}-${version}" \
+        "initramfs-genkernel-${genkernel_arch}-${alt_version}"; do
+        if [ -e "${BOOT_DIR}/${candidate}" ]; then
+            initrd_real="${candidate}"
+            break
+        fi
+    done
+
+    if [ -n "${initrd_early}" ] || [ -n "${initrd_real}" ]; then
+        printf '%s\n' "${initrd_early} ${initrd_real}" | xargs
+    fi
+}
+
+kernel_has_builtin_initramfs() {
+    version="$1"
+    alt_version="$(printf '%s\n' "${version}" | sed -e 's,\.old$,,')"
+
+    for config in \
+        "${BOOT_DIR}/config-${version}" \
+        "${BOOT_DIR}/config-${alt_version}" \
+        "/etc/kernels/kernel-config-${version}"; do
+        if [ -e "${config}" ]; then
+            initramfs_source="$(grep '^CONFIG_INITRAMFS_SOURCE=' "${config}" | cut -d= -f2- | tr -d '"')"
+            [ -n "${initramfs_source}" ] && [ "x${initramfs_source}" != "x" ] && return 0
+            return 1
+        fi
+    done
+
+    return 1
+}
+
+emit_entry() {
+    version="$1"
+    indent="$2"
+    title="$3"
+    kernel="${BOOT_DIR}/vmlinuz-${version}"
+    rel_dirname="$(make_system_path_relative_to_its_root "${BOOT_DIR}")"
+    [ -z "${rel_dirname}" ] && rel_dirname="/boot"
+    prepare_cache="$(prepare_grub_to_access_device "${GRUB_DEVICE_BOOT}" 2>/dev/null | grub_add_tab || true)"
+
+    printf 'Found linux image: %s\n' "${kernel}" >&2
+
+    initrd="$(find_initrd "${version}")"
+    if [ -n "${initrd}" ]; then
+        initrd_display=""
+        for image in ${initrd}; do
+            initrd_display="${initrd_display} ${BOOT_DIR}/${image}"
+        done
+        printf 'Found initrd image: %s\n' "${initrd_display# }" >&2
+    fi
+
+    linux_root_device_thisversion="${linux_root_device}"
+    if [ -z "${initrd}" ] && ! kernel_has_builtin_initramfs "${version}"; then
+        if [ -n "${GRUB_DEVICE_PARTUUID}" ] && [ "x${GRUB_DISABLE_LINUX_PARTUUID}" != "xtrue" ]; then
+            linux_root_device_thisversion="PARTUUID=${GRUB_DEVICE_PARTUUID}"
+        else
+            linux_root_device_thisversion="${GRUB_DEVICE}"
+        fi
+    fi
+
+    echo "${indent}menuentry '$(echo "${title}" | grub_quote)' ${CLASS} {"
+    if [ "x${GRUB_GFXPAYLOAD_LINUX}" = "x" ]; then
+        echo "${indent}    load_video"
+    else
+        if [ "x${GRUB_GFXPAYLOAD_LINUX}" != "xtext" ]; then
+            echo "${indent}    load_video"
+        fi
+        echo "${indent}    set gfxpayload=${GRUB_GFXPAYLOAD_LINUX}"
+    fi
+    echo "${indent}    insmod gzio"
+    printf '%s\n' "${prepare_cache}" | sed "s/^/${indent}/"
+    echo "${indent}    echo 'Loading Linux ${version} ...'"
+    echo "${indent}    linux ${rel_dirname}/vmlinuz-${version} root=${linux_root_device_thisversion} ro ${GRUB_CMDLINE_LINUX} ${GRUB_CMDLINE_LINUX_DEFAULT}"
+
+    if [ -n "${initrd}" ]; then
+        initrd_path=""
+        for image in ${initrd}; do
+            initrd_path="${initrd_path} ${rel_dirname}/${image}"
+        done
+        echo "${indent}    echo 'Loading initial ramdisk ...'"
+        echo "${indent}    initrd${initrd_path}"
+    fi
+    echo "${indent}}"
+}
+
+list_kernels() {
+    pattern="$1"
+
+    for kernel in ${BOOT_DIR}/${pattern}; do
+        if grub_file_is_not_garbage "${kernel}"; then
+            basename "${kernel}" | sed 's/^vmlinuz-//'
+        fi
+    done | version_sort -r
+}
+
+cachyos_kernels="$(list_kernels 'vmlinuz-*cachyos*' | grep -v '\.old$' || true)"
+gentoo_kernels="$(list_kernels 'vmlinuz-*gentoo-dist' | grep -v 'cachyos' | grep -v '\.old$' || true)"
+all_kernels="$(list_kernels 'vmlinuz-*' || true)"
+
+latest_cachyos="$(printf '%s\n' "${cachyos_kernels}" | sed -n '1p')"
+latest_gentoo="$(printf '%s\n' "${gentoo_kernels}" | sed -n '1p')"
+
+remaining=""
+for version in ${all_kernels}; do
+    [ "${version}" = "${latest_cachyos}" ] && continue
+    [ "${version}" = "${latest_gentoo}" ] && continue
+    remaining="${remaining}${version}
+"
+done
+
+echo "### BEGIN 09_custom_kernels ###"
+
+if [ -n "${latest_cachyos}" ]; then
+    emit_entry "${latest_cachyos}" "" "${OS} - CachyOS (${latest_cachyos})"
+fi
+
+if [ -n "${latest_gentoo}" ]; then
+    emit_entry "${latest_gentoo}" "" "${OS} - Generic (${latest_gentoo})"
+fi
+
+if [ -n "$(printf '%s' "${remaining}" | xargs)" ]; then
+    echo "submenu 'Advanced options for ${OS} (older kernels)' ${CLASS} {"
+    printf '%s' "${remaining}" | while IFS= read -r version; do
+        [ -z "${version}" ] && continue
+        emit_entry "${version}" "    " "${OS} - ${version}"
+    done
+    echo "}"
+fi
+
+echo "### END 09_custom_kernels ###"

@@ -1,0 +1,5 @@
+dev-lang/rust low-mem.conf
+dev-qt/qtwebengine low-mem.conf
+llvm-core/clang low-mem.conf
+llvm-core/llvm low-mem.conf
+net-libs/webkit-gtk low-mem.conf
